@@ -34,6 +34,16 @@ export interface Pattern {
   source?: string;                   // 古籍出处（v2 新增）
 }
 
+/**
+ * 格局流派：classic = 通行古书口径（默认）；ni = 倪师《天纪》口径。
+ * 目前仅 A1 明珠出海随此修正（两派同条件，只换出处标注）；其余格局两派相同，B / C 组差异另案处理。
+ */
+export type PatternSchool = 'classic' | 'ni';
+export const DEFAULT_PATTERN_SCHOOL: PatternSchool = 'classic';
+export interface DetectPatternsOptions {
+  patternSchool?: PatternSchool;
+}
+
 // ────────────────── 常量 ──────────────────
 const SHA_NAMES = ['擎羊', '陀罗', '火星', '铃星', '地空', '地劫'];
 const SHA_HARD = ['擎羊', '陀罗', '火星', '铃星'];   // 四煞
@@ -510,15 +520,22 @@ function detectShiZhongYinYu(chart: ZiweiChart, ming: Palace, patterns: Pattern[
   });
 }
 
-/** 明珠出海：命宫在未空宫，对宫丑宫为太阳太阴 */
-function detectMingZhuChuHai(chart: ZiweiChart, ming: Palace, patterns: Pattern[]) {
+/**
+ * 明珠出海：命宫在未，太阳在卯（日照雷门）、太阴在亥（月朗天门）
+ *
+ * 2026-10-30 修正（ziwei-diff-proposal A1）：旧条件「命未空宫＋对宫丑宫日月同度」与
+ * 通行古书条件（日卯月亥，安命未）及倪师《天纪》讲法（命未、三方会卯日亥月，「不管你有没有星」）互斥。
+ * 日卯月亥只出现在紫微在午的盘，此时未宫必无正曜，故两派条件等价，classic / ni 都用新条件。
+ * 旧条件（命未空宫借丑宫日月）本身是另一种盘型，正名待考，暂停用（provisional，不输出）。
+ */
+function detectMingZhuChuHai(chart: ZiweiChart, ming: Palace, patterns: Pattern[], school: PatternSchool) {
   if (ming.branch !== 7) return;   // 命在未
-  if (getMajorStarNames(ming).length > 0) return;   // 命宫为空宫
-  const dui = getDuiGong(chart, ming.branch);
-  if (!dui) return;
-  if (!hasStar(dui, '太阳') || !hasStar(dui, '太阴')) return;
+  const sun = findStarPalace(chart, '太阳');
+  const moon = findStarPalace(chart, '太阴');
+  if (!sun || !moon) return;
+  if (sun.branch !== 3 || moon.branch !== 11) return;   // 太阳在卯、太阴在亥
 
-  const required = ['命宫在未为空宫', '对宫丑宫为太阳太阴同度'];
+  const required = ['命宫在未', '太阳在卯（日照雷门）', '太阴在亥（月朗天门）'];
   const bonus: string[] = [];
   const breaking: string[] = [];
   if (sanFangAllStars(chart).has('文昌') || sanFangAllStars(chart).has('文曲')) bonus.push('再会昌曲');
@@ -528,10 +545,12 @@ function detectMingZhuChuHai(chart: ZiweiChart, ming: Palace, patterns: Pattern[
   patterns.push({
     name: '明珠出海',
     level: breaking.length ? 'good' : 'excellent',
-    description: '命未空宫，对宫丑宫日月同辉拱照，号"明珠出海"。主出生平凡、后天努力出头，宜远赴他乡、学术研究或大公司高位，主大富大贵。',
-    palaces: ['命宫', dui.name],
+    description: '命安未宫，太阳在卯日照雷门、太阴在亥月朗天门，日月并明拱照命宫，号"明珠出海"。主出生平凡、后天努力出头，宜远赴他乡、学术研究或大公司高位，主大富大贵。',
+    palaces: ['命宫', sun.name, moon.name],
     conditions: { required, bonus, breaking },
-    source: '《紫微斗数全集·明珠出海》',
+    source: school === 'ni'
+      ? '倪师《天纪》紫微斗数讲义（明珠出海：日照雷门、月朗天门）'
+      : '通行古书条件「日卯月亥，安命未」',
   });
 }
 
@@ -1016,7 +1035,8 @@ function detectKeQuanShuangHui(chart: ZiweiChart, patterns: Pattern[]) {
 }
 
 // ────────────────── 主入口 ──────────────────
-export function detectPatterns(chart: ZiweiChart): Pattern[] {
+export function detectPatterns(chart: ZiweiChart, opts: DetectPatternsOptions = {}): Pattern[] {
+  const school: PatternSchool = opts.patternSchool ?? DEFAULT_PATTERN_SCHOOL;
   const patterns: Pattern[] = [];
   const ming = chart.palaces.find(p => p.branch === chart.mingGongBranch);
   if (!ming) return patterns;
@@ -1039,7 +1059,7 @@ export function detectPatterns(chart: ZiweiChart): Pattern[] {
   detectRiYueJiaMing(chart, patterns);
   detectJuRiTongGong(chart, patterns);
   detectShiZhongYinYu(chart, ming, patterns);
-  detectMingZhuChuHai(chart, ming, patterns);
+  detectMingZhuChuHai(chart, ming, patterns, school);
   detectZiWeiInMing(chart, ming, patterns);
 
   // 助力格
