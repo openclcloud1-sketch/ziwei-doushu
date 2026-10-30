@@ -36,7 +36,13 @@ export interface Pattern {
 
 /**
  * 格局流派：classic = 通行古书口径（默认）；ni = 倪师《天纪》口径。
- * 目前仅 A1 明珠出海随此修正（两派同条件，只换出处标注）；其余格局两派相同，B / C 组差异另案处理。
+ * A1 明珠出海：两派同条件，只换出处标注。
+ * C1–C3 已落地（2026-10-30，对照 results/20261030-patterns-gap-decide.md）：
+ *  - C1：ni 派新增 七杀朝斗、紫府夹权、日丽中天、雄宿朝元（classic 不输出）
+ *  - C2：禄存入身／天马入命／辅弼同会／魁钺同会 4 句冒名倪师的引文改标「待考」（天纪语料 0 命中、人纪无依据），判断条件不变
+ *  - C3：巨日同宫 ni 派寅申同宫或巳亥对宫会照，双方皆非落陷（dim）即成，庙旺为加分；classic 不变
+ * 口径：results/20261030-patterns-c1c3-spec.md（紫微海厦协同）
+ * 其余格局两派相同；第二批（禄马交驰、羊陀夹命等）待条件研究后另案。
  */
 export type PatternSchool = 'classic' | 'ni';
 export const DEFAULT_PATTERN_SCHOOL: PatternSchool = 'classic';
@@ -471,11 +477,47 @@ function detectRiYueJiaMing(chart: ZiweiChart, patterns: Pattern[]) {
   });
 }
 
-/** 巨日同宫：巨门太阳同入寅或申 */
-function detectJuRiTongGong(chart: ZiweiChart, patterns: Pattern[]) {
+/**
+ * 巨日同宫：
+ *  - classic：巨门太阳同入寅或申（申宫列破格「偏西」）
+ *  - ni（C3，倪师《天纪》）：寅或申同宫；或仅巳↔亥对宫会照（日巳巨亥／日亥巨巳）。双方皆非落陷（brightness !== 'dim'）即过门，
+ *    庙旺（isBright）只作加分；ni 不沿用 classic「申宫必破格」。三方其他会照本轮不纳。
+ */
+function detectJuRiTongGong(chart: ZiweiChart, patterns: Pattern[], school: PatternSchool = DEFAULT_PATTERN_SCHOOL) {
   const ju = findStarPalace(chart, '巨门');
   const sun = findStarPalace(chart, '太阳');
-  if (!ju || !sun || ju.branch !== sun.branch) return;
+  if (!ju || !sun) return;
+
+  if (school === 'ni') {
+    const same = ju.branch === sun.branch && (ju.branch === 2 || ju.branch === 8);
+    const oppose = (sun.branch === 5 && ju.branch === 11) || (sun.branch === 11 && ju.branch === 5);   // 仅巳↔亥
+    if (!same && !oppose) return;
+    if (isDim(ju, '巨门') || isDim(sun, '太阳')) return;   // 倪师：落陷不成格
+
+    const inMing = ju.branch === chart.mingGongBranch || (oppose && sun.branch === chart.mingGongBranch);
+    const required = same
+      ? [`巨门太阳同入${BRANCH_NAMES[ju.branch]}宫`, '太阳、巨门皆不落陷']
+      : [`太阳${BRANCH_NAMES[sun.branch]}、巨门${BRANCH_NAMES[ju.branch]}对宫会照`, '太阳、巨门皆不落陷'];
+    const bonus: string[] = [];
+    if (isBright(sun, '太阳') && isBright(ju, '巨门')) bonus.push('太阳、巨门皆庙旺');
+    const breaking: string[] = [];
+    if (getStarSiHua(ju, '巨门') === '禄' || getStarSiHua(ju, '巨门') === '权') bonus.push('巨门化禄/化权（口才生财）');
+    if (getStarSiHua(ju, '巨门') === '忌') breaking.push('巨门化忌（口舌官非）');
+
+    patterns.push({
+      name: '巨日同宫',
+      level: breaking.length ? 'caution' : (inMing ? 'excellent' : 'good'),
+      description: same
+        ? `巨门太阳同${BRANCH_NAMES[ju.branch]}宫且皆不落陷，太阳化解巨门暗曜，主以口才、传媒、外语、专业立业。倪师以庙旺落陷论，不以申宫一刀切。怕巨门化忌则官非。`
+        : `太阳在${BRANCH_NAMES[sun.branch]}、巨门在${BRANCH_NAMES[ju.branch]}对宫会照，皆不落陷。倪师：会照亦成，落陷不成格。主以口才、传媒、外语、专业立业。怕巨门化忌则官非。`,
+      palaces: same ? [ju.name] : [sun.name, ju.name],
+      conditions: { required, bonus, breaking },
+      source: '倪师《天纪》紫微斗数讲义（巨日格：寅申同宫或巳亥会照，落陷不成）',
+    });
+    return;
+  }
+
+  if (ju.branch !== sun.branch) return;
   if (ju.branch !== 2 && ju.branch !== 8) return;  // 必须寅(2) 或 申(8)
 
   const inMing = ju.branch === chart.mingGongBranch;
@@ -551,6 +593,88 @@ function detectMingZhuChuHai(chart: ZiweiChart, ming: Palace, patterns: Pattern[
     source: school === 'ni'
       ? '倪师《天纪》紫微斗数讲义（明珠出海：日照雷门、月朗天门）'
       : '通行古书条件「日卯月亥，安命未」',
+  });
+}
+
+// ────────────────── C1：倪师《天纪》格（仅 patternSchool='ni' 输出）──────────────────
+const NI_SOURCE = '倪师《天纪》紫微斗数讲义';
+
+/** 七杀朝斗：七杀坐命于寅或申，对宫（迁移）紫微天府同宫 */
+function detectQiShaChaoDou(chart: ZiweiChart, ming: Palace, patterns: Pattern[]) {
+  if (ming.branch !== 2 && ming.branch !== 8) return;
+  if (!hasStar(ming, '七杀')) return;
+  const dui = getDuiGong(chart, ming.branch);
+  if (!dui || !hasStar(dui, '紫微') || !hasStar(dui, '天府')) return;
+
+  const required = [`七杀坐命于${BRANCH_NAMES[ming.branch]}宫`, `对宫${BRANCH_NAMES[dui.branch]}宫紫微天府同宫`];
+  const bonus: string[] = [];
+  const breaking: string[] = [];
+  const sanFangSet = sanFangAllStars(chart);
+  if (sanFangSet.has('左辅') || sanFangSet.has('右弼')) bonus.push('辅弼会照');
+  if (sanFangShaCount(chart, SHA_HARD) >= 2) breaking.push('三方煞重');
+
+  patterns.push({
+    name: '七杀朝斗',
+    level: breaking.length ? 'good' : 'excellent',
+    description: `七杀坐命${BRANCH_NAMES[ming.branch]}宫，对宫紫府朝照，将星朝帝，主有魄力、能开创、得上位者赏识。`,
+    palaces: ['命宫', dui.name],
+    conditions: { required, bonus, breaking },
+    source: `${NI_SOURCE}（七杀朝斗）`,
+  });
+}
+
+/** 紫府夹权：命宫寅或申，前后两宫一为紫微、一为天府 */
+function detectZiFuJiaQuan(chart: ZiweiChart, ming: Palace, patterns: Pattern[]) {
+  if (ming.branch !== 2 && ming.branch !== 8) return;
+  const { prev, next } = getJiaPalaces(chart, ming.branch);
+  if (!prev || !next) return;
+  const ok = (hasStar(prev, '紫微') && hasStar(next, '天府')) || (hasStar(prev, '天府') && hasStar(next, '紫微'));
+  if (!ok) return;
+
+  patterns.push({
+    name: '紫府夹权',
+    level: 'good',
+    description: '紫微、天府分居命宫前后两宫夹命，帝星库星夹辅，主得权贵提携、做事有靠山。',
+    palaces: ['命宫', prev.name, next.name],
+    conditions: { required: [`命宫在${BRANCH_NAMES[ming.branch]}`, '紫微天府分居命宫前后两宫'] },
+    source: `${NI_SOURCE}（紫府夹权）`,
+  });
+}
+
+/** 日丽中天：太阳坐命于午（本命层；大限「十年日丽中天」不在此判） */
+function detectRiLiZhongTian(chart: ZiweiChart, ming: Palace, patterns: Pattern[]) {
+  if (ming.branch !== 6) return;
+  if (!hasStar(ming, '太阳')) return;
+  const breaking: string[] = [];
+  if (getStarSiHua(ming, '太阳') === '忌') breaking.push('太阳化忌');
+
+  patterns.push({
+    name: '日丽中天',
+    level: breaking.length ? 'good' : 'excellent',
+    description: '太阳坐命午宫，日正当中，光明磊落、名声显扬，主贵显。（本命层判定；大限走午另论）',
+    palaces: ['命宫'],
+    conditions: { required: ['太阳坐命于午宫'], breaking },
+    source: `${NI_SOURCE}（日丽中天）`,
+  });
+}
+
+/** 雄宿朝元：廉贞独守命宫于寅或申（命宫正曜只有廉贞）；财帛有禄为加分 */
+function detectXiongSuChaoYuan(chart: ZiweiChart, ming: Palace, patterns: Pattern[]) {
+  if (ming.branch !== 2 && ming.branch !== 8) return;
+  const majors = getMajorStarNames(ming);
+  if (majors.length !== 1 || majors[0] !== '廉贞') return;
+
+  const bonus: string[] = [];
+  const cai = getPalaceByBranch(chart, ming.branch + 8);   // 财帛 = 命宫逆数第 5 宫
+  if (cai && (hasStar(cai, '禄存') || cai.stars.some(s => s.siHua === '禄'))) bonus.push('财帛宫有禄存或化禄');
+
+  patterns.push({
+    name: '雄宿朝元',
+    level: bonus.length ? 'excellent' : 'good',
+    description: `廉贞独守命宫${BRANCH_NAMES[ming.branch]}宫，雄宿朝元，主刚毅有为、能任要职。财帛见禄尤佳。`,
+    palaces: ['命宫'],
+    conditions: { required: [`廉贞独守命宫于${BRANCH_NAMES[ming.branch]}（无其他正曜）`], bonus },
+    source: `${NI_SOURCE}（雄宿朝元）`,
   });
 }
 
@@ -869,10 +993,10 @@ function detectLuCunShouShen(chart: ZiweiChart, patterns: Pattern[]) {
     level: 'good',
     description: inMing
       ? '禄存坐命，主一生衣食无忧、财禄稳定。性格保守，善积累，但羊陀夹禄须防小人。最宜配化禄、左辅右弼方为大格。'
-      : '禄存入身宫，主中年后财源稳定、得禄自享。倪师说「禄存入身，财气近身」——配偶或事业方向能带来稳定财禄。',
+      : '禄存入身宫，主中年后财源稳定、得禄自享。待考：「禄存入身，财气近身」——配偶或事业方向能带来稳定财禄。',
     palaces: [inMing ? '命宫' : '身宫'],
     conditions: { required: [inMing ? '禄存入命宫' : '禄存入身宫'] },
-    source: '《紫微斗数全书·禄存星》',
+    source: inMing ? '《紫微斗数全书·禄存星》' : '《紫微斗数全书·禄存星》；引文「禄存入身，财气近身」出处待考',
   });
 }
 
@@ -887,11 +1011,11 @@ function detectTianMaRuMing(chart: ZiweiChart, patterns: Pattern[]) {
     name: inMing ? '天马入命' : '天马在迁',
     level: 'neutral',
     description: inMing
-      ? '天马坐命，主一生奔波、动中得财，宜走商旅、外勤、跨界发展。倪师说「天马入命，无禄不发」——若再会禄存或化禄即「禄马交驰」之富格。'
+      ? '天马坐命，主一生奔波、动中得财，宜走商旅、外勤、跨界发展。待考：「天马入命，无禄不发」——若再会禄存或化禄即「禄马交驰」之富格。'
       : '天马在迁移宫，主外出有利、远行得财，宜异乡发展。配化禄主异地生财，配煞星则旅途多波折。',
     palaces: [tianMaPalace.name],
     conditions: { required: [inMing ? '天马入命宫' : '天马入迁移宫'] },
-    source: '《紫微斗数全书·天马星》',
+    source: inMing ? '《紫微斗数全书·天马星》；引文「天马入命，无禄不发」出处待考' : '《紫微斗数全书·天马星》',
   });
 }
 
@@ -992,10 +1116,10 @@ function detectFuBiTongHui(chart: ZiweiChart, patterns: Pattern[]) {
   patterns.push({
     name: '辅弼同会',
     level: 'good',
-    description: '左辅右弼同会命宫三方四正，主一生贵人不绝、人缘极佳。最宜领导岗位与团队合作型工作。倪师说「辅弼夹命，平生贵人多」——你不是单打独斗的命，要善用人际网络。',
+    description: '左辅右弼同会命宫三方四正，主一生贵人不绝、人缘极佳。最宜领导岗位与团队合作型工作。待考：「辅弼夹命，平生贵人多」——你不是单打独斗的命，要善用人际网络。',
     palaces: ['命宫'],
     conditions: { required: ['左辅、右弼同会命宫三方四正'] },
-    source: '《紫微斗数全书·辅弼论》',
+    source: '《紫微斗数全书·辅弼论》；引文「辅弼夹命，平生贵人多」出处待考',
   });
 }
 
@@ -1006,10 +1130,10 @@ function detectKuiYueTongHui(chart: ZiweiChart, patterns: Pattern[]) {
   patterns.push({
     name: '魁钺同会',
     level: 'good',
-    description: '天魁天钺同会命宫三方四正，主"天乙贵人"加持，关键时刻总有贵人提携。倪师说「魁钺夹命，必为贵人」——遇到困难时身边会出现得力相助者，宜主动维护人脉。',
+    description: '天魁天钺同会命宫三方四正，主"天乙贵人"加持，关键时刻总有贵人提携。待考：「魁钺夹命，必为贵人」——遇到困难时身边会出现得力相助者，宜主动维护人脉。',
     palaces: ['命宫'],
     conditions: { required: ['天魁、天钺同会命宫三方四正'] },
-    source: '《紫微斗数全书·魁钺论》',
+    source: '《紫微斗数全书·魁钺论》；引文「魁钺夹命，必为贵人」出处待考',
   });
 }
 
@@ -1057,10 +1181,18 @@ export function detectPatterns(chart: ZiweiChart, opts: DetectPatternsOptions = 
   detectTongLiang(chart, patterns);
   detectRiYueTongGong(chart, patterns);
   detectRiYueJiaMing(chart, patterns);
-  detectJuRiTongGong(chart, patterns);
+  detectJuRiTongGong(chart, patterns, school);
   detectShiZhongYinYu(chart, ming, patterns);
   detectMingZhuChuHai(chart, ming, patterns, school);
   detectZiWeiInMing(chart, ming, patterns);
+
+  // C1：倪师《天纪》格（classic 不输出）
+  if (school === 'ni') {
+    detectQiShaChaoDou(chart, ming, patterns);
+    detectZiFuJiaQuan(chart, ming, patterns);
+    detectRiLiZhongTian(chart, ming, patterns);
+    detectXiongSuChaoYuan(chart, ming, patterns);
+  }
 
   // 助力格
   detectFuBiJiaMing(chart, patterns);
